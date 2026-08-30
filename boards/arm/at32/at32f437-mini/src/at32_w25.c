@@ -129,6 +129,7 @@ int at32_w25initialize(int minor)
   /* Register the MTD driver */
 
   char path[32];
+
   snprintf(path, sizeof(path), "/dev/mtdblock%d", minor);
   ret = register_mtddriver(path, mtd, 0755, NULL);
   if (ret < 0)
@@ -147,6 +148,7 @@ int at32_w25initialize(int minor)
   int partoffset;
   int partszbytes;
   int erasesize;
+  int blkpererase;
   const char *partstring = FLASH_PART_LIST;
   const char *ptr;
   struct mtd_dev_s *mtd_part;
@@ -197,7 +199,16 @@ int at32_w25initialize(int minor)
           return -1;
         }
 
-      mtd_part = mtd_partition(mtd, partoffset, partszbytes / erasesize);
+      /* mtd_partition() expects the offset and size in units of the
+       * underlying device "blocks" (geo.blocksize, 256B for the W25),
+       * not erase blocks.  partoffset is tracked in erase blocks, so
+       * convert.  Without this, partitions are erasesize/blocksize
+       * (16x for the W25) too small and misaligned.
+       */
+
+      blkpererase = geo.blocksize > 0 ? erasesize / geo.blocksize : 1;
+      mtd_part = mtd_partition(mtd, partoffset * blkpererase,
+                               partszbytes / geo.blocksize);
       partoffset += partszbytes / erasesize;
 
 #ifdef FLASH_CONFIG_PART

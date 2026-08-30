@@ -93,132 +93,143 @@ int sam_smartfs_initialize(void)
       return ret;
     }
 
-  #ifdef CONFIG_MTD_PARTITION
+#ifdef CONFIG_MTD_PARTITION
+{
+  int partno;
+  int partsize;
+  int partoffset;
+  int partszbytes;
+  int erasesize;
+  int blkpererase;
+  const char *partstring = "256";
+  const char *ptr;
+  struct mtd_dev_s *mtd_part;
+  char  partref[16];
+
+  /* Now create a partition on the FLASH device */
+
+  partno = 0;
+  ptr = partstring;
+  partoffset = 0;
+
+  /* Get the Flash erase size */
+
+  erasesize = geo.erasesize;
+
+  while (*ptr != '\0')
     {
-      int partno;
-      int partsize;
-      int partoffset;
-      int partszbytes;
-      int erasesize;
-      const char *partstring = "256";
-      const char *ptr;
-      struct mtd_dev_s *mtd_part;
-      char  partref[16];
+      /* Get the partition size */
 
-      /* Now create a partition on the FLASH device */
+      partsize = atoi(ptr);
+      partszbytes = (partsize << 10); /* partsize is defined in KB */
+      printf("partsize %d partszbytes %d\n", partsize, partszbytes);
 
-      partno = 0;
-      ptr = partstring;
-      partoffset = 0;
+      /* Check if partition size is bigger then erase block */
 
-          /* Get the Flash erase size */
-
-          erasesize = geo.erasesize;
-
-          while (*ptr != '\0')
-            {
-              /* Get the partition size */
-
-              partsize = atoi(ptr);
-              partszbytes = (partsize << 10); /* partsize is defined in KB */
-              printf("partsize %d partszbytes %d\n", partsize, partszbytes);
-
-              /* Check if partition size is bigger then erase block */
-
-              if (partszbytes < erasesize)
-                {
-                  syslog(LOG_ERR,
-                    "ERROR: Partition size is lesser than erasesize!\n");
-                  return -1;
-                }
-
-              /* Check if partition size is multiple of erase block */
-
-              if ((partszbytes % erasesize) != 0)
-                {
-                  syslog(LOG_ERR,
-                    "ERROR: Partition size is not multiple of erasesize!\n");
-                  return -1;
-                }
-
-              mtd_part = mtd_partition(mtd, partoffset,
-                                       partszbytes / erasesize);
-              partoffset += partszbytes / erasesize;
-
-              /* Test if this is the config partition */
-
-            #ifndef  CONFIG_MTD_CONFIG_NONE
-              if (partno == 0)
-                {
-                  /* Register the partition as the config device */
-
-                  mtdconfig_register(mtd_part);
-                }
-                else
-            #endif
-                {
-                  /* Now initialize a SMART Flash block device
-                   * and bind it to the MTD device.
-                   */
-
-            #if defined(CONFIG_MTD_SMART) && defined(CONFIG_FS_SMARTFS)
-                      snprintf(partref, sizeof(partref), "p%d", partno);
-                      smart_initialize(0, mtd_part, partref);
-            #endif
-                }
-
-                  /* Set the partition name */
-
-            #ifdef CONFIG_MTD_PARTITION_NAMES
-                  if (!mtd_part)
-                    {
-                      syslog(LOG_ERR,
-                            "Error: failed to create partition %s\n",
-                            partname);
-                      return -1;
-                    }
-
-                  mtd_setpartitionname(mtd_part, partname);
-
-                  /* Now skip to next name.
-                   * We don't need to split the string here
-                   * because the MTD partition logic will only
-                   * display names up to the comma,
-                   * thus allowing us to use a single static name
-                   * in the code.
-                   */
-
-                  while (*partname != ',' && *partname != '\0')
-                    {
-                      /* Skip to next ',' */
-
-                      partname++;
-                    }
-
-                  if (*partname == ',')
-                    {
-                      partname++;
-                    }
-            #endif
-
-          /* Update the pointer to point to the next size in the list */
-
-          while ((*ptr >= '0') && (*ptr <= '9'))
-            {
-              ptr++;
-            }
-
-          if (*ptr == ',')
-            {
-              ptr++;
-            }
-
-          /* Increment the part number */
-
-          partno++;
+      if (partszbytes < erasesize)
+        {
+          syslog(LOG_ERR,
+                "ERROR: Partition size is lesser than erasesize!\n");
+          return -1;
         }
+
+      /* Check if partition size is multiple of erase block */
+
+      if ((partszbytes % erasesize) != 0)
+        {
+          syslog(LOG_ERR,
+                "ERROR: Partition size is not multiple of erasesize!\n");
+          return -1;
+        }
+
+      /* mtd_partition() expects the offset and size in units of
+       * the underlying device "blocks" (geo.blocksize, 512B for
+       * the SAMD5E5 progmem), not erase blocks.  partoffset is
+       * tracked in erase blocks, so convert.  Without this,
+       * partitions are erasesize/blocksize (16x) too small and
+       * misaligned.
+       */
+
+      blkpererase = geo.blocksize > 0 ?
+                    erasesize / geo.blocksize : 1;
+      mtd_part = mtd_partition(mtd, partoffset * blkpererase,
+                               partszbytes / geo.blocksize);
+      partoffset += partszbytes / erasesize;
+
+      /* Test if this is the config partition */
+
+#ifndef CONFIG_MTD_CONFIG_NONE
+      if (partno == 0)
+        {
+          /* Register the partition as the config device */
+
+          mtdconfig_register(mtd_part);
+        }
+      else
+#endif
+        {
+          /* Now initialize a SMART Flash block device
+           * and bind it to the MTD device.
+           */
+
+#if defined(CONFIG_MTD_SMART) && defined(CONFIG_FS_SMARTFS)
+          snprintf(partref, sizeof(partref), "p%d", partno);
+          smart_initialize(0, mtd_part, partref);
+#endif
+        }
+
+      /* Set the partition name */
+
+#ifdef CONFIG_MTD_PARTITION_NAMES
+      if (!mtd_part)
+        {
+          syslog(LOG_ERR,
+                "Error: failed to create partition %s\n",
+                partname);
+          return -1;
+        }
+
+      mtd_setpartitionname(mtd_part, partname);
+
+      /* Now skip to next name.
+       * We don't need to split the string here
+       * because the MTD partition logic will only
+       * display names up to the comma,
+       * thus allowing us to use a single static name
+       * in the code.
+       */
+
+      while (*partname != ',' && *partname != '\0')
+        {
+          /* Skip to next ',' */
+
+          partname++;
+        }
+
+      if (*partname == ',')
+        {
+          partname++;
+        }
+#endif
+
+      /* Update the pointer to point to the next size in the list */
+
+      while ((*ptr >= '0') && (*ptr <= '9'))
+        {
+          ptr++;
+        }
+
+      if (*ptr == ',')
+        {
+          ptr++;
+        }
+
+      /* Increment the part number */
+
+      partno++;
     }
-  #else /* CONFIG_MTD_PARTITION */
+}
+#else /* CONFIG_MTD_PARTITION */
 
   /* Configure the device with no partition support */
 
@@ -229,7 +240,7 @@ int sam_smartfs_initialize(void)
       return ret;
     }
 
-    #endif
+#endif
 
   return OK;
 }
